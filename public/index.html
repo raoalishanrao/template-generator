@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Template Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=Space+Grotesk:wght@600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f0f12;
+      --surface: #18181c;
+      --border: #2a2a30;
+      --text: #e4e4e7;
+      --muted: #71717a;
+      --accent: #a78bfa;
+      --accent-hover: #c4b5fd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    h1 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 700;
+      font-size: 1.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .subtitle { color: var(--muted); margin-bottom: 2rem; }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .topbar-actions {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .form-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1fr 1fr auto;
+      gap: 1rem;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+    @media (max-width: 700px) {
+      .form-grid { grid-template-columns: 1fr 1fr; }
+    }
+    label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    input, select {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    button {
+      padding: 0.65rem 1.25rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    button:hover { background: var(--accent-hover); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-loading {
+      position: relative;
+      padding-left: 2.1rem;
+    }
+    .btn-loading::before {
+      content: '';
+      position: absolute;
+      left: 0.75rem;
+      top: 50%;
+      width: 0.9rem;
+      height: 0.9rem;
+      margin-top: -0.45rem;
+      border-radius: 999px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      animation: spin 0.75s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .status {
+      margin-top: 1rem;
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    .status.error { color: #f87171; }
+    .examples-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .examples-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .examples-title {
+      margin: 0;
+      font-weight: 700;
+      font-size: 1rem;
+      font-family: 'Space Grotesk', sans-serif;
+    }
+    .examples-subtitle {
+      margin: 0.15rem 0 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+      max-width: 60ch;
+    }
+    .examples-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 0.75rem;
+    }
+    .example-chip {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      padding: 0.85rem 0.9rem;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      cursor: pointer;
+      text-align: left;
+    }
+    .example-chip:hover {
+      border-color: var(--accent);
+      background: rgba(167,139,250,0.08);
+    }
+    .example-cat {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .example-niche {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .example-notes {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1.5rem;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .card.placeholder {
+      border-style: dashed;
+      opacity: 0.92;
+    }
+    .preview-wrap {
+      position: relative;
+      width: 100%;
+      padding-bottom: 100%;
+      background: #1c1c1e;
+    }
+    .preview {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    .preview canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .skeleton {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(110deg, rgba(255,255,255,0.03) 8%, rgba(255,255,255,0.09) 18%, rgba(255,255,255,0.03) 33%);
+      background-size: 200% 100%;
+      animation: shimmer 1.25s linear infinite;
+    }
+    .skeleton-line {
+      height: 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.12);
+      margin: 10px 0;
+    }
+    .skeleton-line.short { width: 42%; }
+    .skeleton-line.mid { width: 62%; }
+    .skeleton-line.long { width: 84%; }
+    @keyframes shimmer {
+      to { background-position: -200% 0; }
+    }
+    .card-title {
+      padding: 0.75rem 1rem;
+      font-weight: 600;
+      font-size: 0.9375rem;
+    }
+    .card-meta {
+      padding: 0 1rem 0.75rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .card-badges {
+      padding: 0 1rem 0.6rem;
+      display: flex;
+      gap: 0.45rem;
+      flex-wrap: wrap;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.7rem;
+      line-height: 1;
+      padding: 0.28rem 0.45rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: rgba(255,255,255,0.02);
+      white-space: nowrap;
+    }
+    .badge strong {
+      color: var(--text);
+      font-weight: 700;
+      font-size: 0.72rem;
+    }
+    .card-actions {
+      padding: 0 1rem 1rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.5rem 0.75rem;
+      border-radius: 8px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+    }
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(6px);
+      z-index: 50;
+    }
+    .modal.open { display: flex; }
+    .modal-panel {
+      width: min(900px, 100%);
+      max-height: min(80vh, 900px);
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.9rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 700;
+      font-size: 1rem;
+      margin: 0;
+    }
+    .modal-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .modal-body {
+      padding: 1rem;
+      overflow: auto;
+      background: #0b0b0e;
+    }
+    pre.json {
+      margin: 0;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      color: #e5e7eb;
+      white-space: pre;
+      tab-size: 2;
+    }
+
+    .tester {
+      display: none;
+      margin-bottom: 2rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .tester.open { display: block; }
+    .tester-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.9rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .tester-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 700;
+      font-size: 1rem;
+      margin: 0;
+    }
+    .tester-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 0;
+    }
+    @media (max-width: 900px) {
+      .tester-grid { grid-template-columns: 1fr; }
+    }
+    .tester-pane {
+      padding: 1rem;
+      border-right: 1px solid var(--border);
+    }
+    @media (max-width: 900px) {
+      .tester-pane { border-right: none; border-bottom: 1px solid var(--border); }
+    }
+    .tester-preview {
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    textarea {
+      width: 100%;
+      min-height: 320px;
+      resize: vertical;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #0b0b0e;
+      color: var(--text);
+      font: 0.85rem ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      line-height: 1.35;
+    }
+    textarea:focus { outline: none; border-color: var(--accent); }
+    .tester-help { font-size: 0.8125rem; color: var(--muted); margin-top: 0.75rem; }
+    .tester-status { font-size: 0.875rem; color: var(--muted); }
+    .tester-status.error { color: #f87171; }
+    .tester-canvas {
+      width: 100%;
+      aspect-ratio: 4 / 5;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #0b0b0e;
+      display: grid;
+      place-items: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div>
+        <h1>Template Generator</h1>
+        <p class="subtitle">Generate unique social media templates by niche and count. Previews render below.</p>
+      </div>
+      <div class="topbar-actions">
+        <button id="openTesterBtn" type="button" class="btn-secondary">Template Tester</button>
+      </div>
+    </div>
+
+    <section id="tester" class="tester" aria-label="Template tester">
+      <div class="tester-head">
+        <h2 class="tester-title">Template Tester</h2>
+        <div class="modal-actions">
+          <button id="renderTesterBtn" type="button" class="btn-secondary">Render</button>
+          <button id="copyTesterBtn" type="button" class="btn-secondary">Copy</button>
+          <button id="closeTesterBtn" type="button" class="btn-secondary">Close</button>
+        </div>
+      </div>
+      <div class="tester-grid">
+        <div class="tester-pane">
+          <label for="testerJson">Paste template JSON</label>
+          <textarea id="testerJson" spellcheck="false" placeholder="{ ...template json... }"></textarea>
+          <div class="tester-help">Tip: You can also click “View JSON” on any generated template and paste it here.</div>
+        </div>
+        <div class="tester-preview">
+          <div id="testerStatus" class="tester-status" aria-live="polite">Paste JSON and click Render.</div>
+          <div class="tester-canvas">
+            <div id="testerPreview"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="form-card">
+      <form id="form">
+        <div class="form-grid">
+          <div>
+            <label for="niche">Niche</label>
+            <input id="niche" name="niche" type="text" placeholder="e.g. Coffee Shop" required />
+          </div>
+          <div>
+            <label for="category">Category</label>
+            <input id="category" name="category" type="text" placeholder="e.g. Social" value="Social" />
+          </div>
+          <div>
+            <label for="platform">Template type</label>
+            <select id="platform" name="platform">
+              <option value="instagram_post" selected>Instagram post</option>
+              <option value="facebook_post">Facebook post</option>
+              <option value="pinterest_post">Pinterest post</option>
+            </select>
+          </div>
+          <div>
+            <label for="brandName">Brand name (optional)</label>
+            <input id="brandName" name="brandName" type="text" placeholder="e.g. BOROELLE" />
+          </div>
+          <div>
+            <label for="visualStyle">Design style (optional)</label>
+            <input id="visualStyle" name="visualStyle" type="text" placeholder="e.g. Modern editorial" />
+          </div>
+          <div>
+            <label for="count">Templates to generate</label>
+            <select id="count" name="count">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="15">15</option>
+              <option value="20">20</option>
+              <option value="25">25</option>
+              <option value="30">30</option>
+            </select>
+          </div>
+          <div>
+            <button type="submit" id="submitBtn">Generate</button>
+          </div>
+        </div>
+      </form>
+      <p id="status" class="status" aria-live="polite"></p>
+    </div>
+
+    <section class="examples-card" aria-label="Examples">
+      <div class="examples-header">
+        <div>
+          <h2 class="examples-title">Examples</h2>
+          <p class="examples-subtitle">Trending categories and niches. Click an example to autofill the form and explore what the system can generate.</p>
+        </div>
+        <button id="toggleExamplesBtn" type="button" class="btn-secondary">Show More Examples</button>
+      </div>
+      <div id="examplesGrid" class="examples-grid"></div>
+    </section>
+
+    <div id="grid" class="grid"></div>
+  </div>
+
+  <div id="jsonModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="jsonModalTitle">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="jsonModalTitle" class="modal-title">Template JSON</h2>
+        <div class="modal-actions">
+          <button id="copyJsonBtn" type="button" class="btn-secondary">Copy</button>
+          <button id="closeJsonBtn" type="button" class="btn-secondary">Close</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <pre id="jsonModalPre" class="json"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="render.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
