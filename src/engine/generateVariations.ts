@@ -11,11 +11,16 @@ import type {
   ElementRole,
   Canvas,
   TemplateMatchScope,
+  ElementConstraints,
 } from '../types/schema.js';
 import { resolveTemplateTaxonomy, buildTemplateIndexTags } from '../config/templateTaxonomy.js';
 import type { ResolvedTemplateTaxonomy } from '../config/templateTaxonomy.js';
 import type { ContentPackage } from '../types/schema.js';
-import { generateContentPackages, generateSkeletonAndContentPackage } from './contentExpansion.js';
+import {
+  generateContentPackages,
+  generateSkeletonAndContentPackage,
+  finalizeTextElementConstraints,
+} from './contentExpansion.js';
 import {
   getContentForRole,
   getCanvasBackgroundStockQuery,
@@ -43,7 +48,7 @@ interface RuntimeSkeleton {
     style: Record<string, unknown>;
     zIndex?: number;
     content: string;
-    constraints?: { maxCharacters?: number; maxLines?: number };
+    constraints?: ElementConstraints | { maxCharacters?: number; maxLines?: number };
     textZone?: boolean;
   }>;
 }
@@ -466,6 +471,9 @@ async function buildTemplateFromPackage(
     const contentSlot = el.role;
     if (!contentSlots.includes(contentSlot)) contentSlots.push(contentSlot);
 
+    const templateConstraints: ElementConstraints | null =
+      el.type === 'text' ? (finalizeTextElementConstraints('text', el.role, el.constraints) ?? null) : null;
+
     let content: string | null = null;
     if (el.type === 'text') {
       if (el.role === 'BRAND_NAME') {
@@ -570,7 +578,7 @@ async function buildTemplateFromPackage(
         rotation: 0,
         style: { fill: overlayColor, cornerRadius: 12 } as unknown as TemplateElement['style'],
         content: null,
-        constraints: el.constraints ?? null,
+        constraints: null,
         assetReferenceId: '',
         crop: null,
         zIndex: z++,
@@ -589,7 +597,7 @@ async function buildTemplateFromPackage(
       rotation: 0,
       style: scaleStyle(style as TemplateElement['style'], sFont),
       content,
-      constraints: el.constraints ?? null,
+      constraints: templateConstraints,
       assetReferenceId: '',
       crop: null,
       zIndex: typeof el.zIndex === 'number' && Number.isFinite(el.zIndex) ? el.zIndex : z++,

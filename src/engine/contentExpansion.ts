@@ -8,7 +8,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
-import type { ContentPackage, StockPhotoQueries } from '../types/schema.js';
+import type { ContentPackage, ElementConstraints, StockPhotoQueries } from '../types/schema.js';
 import { APP_CONFIG } from '../config/constants.js';
 
 export interface LlmSkeletonElement {
@@ -33,7 +33,8 @@ export interface LlmSkeletonElement {
   dimensions: { w: number; h: number };
   style: Record<string, unknown>;
   z_index?: number;
-  constraints?: { maxCharacters?: number; maxLines?: number };
+  /** Present for every text element after normalization (image/shape omit). */
+  constraints?: ElementConstraints;
   textZone?: boolean;
   content_placeholder?: string;
 }
@@ -330,6 +331,11 @@ Visual Weight: Balance a large image in one quadrant with text in the opposite q
 
 Rule: Every element MUST include content_placeholder (string). For text elements, it must be the exact label to render (including CTA/action labels).
 
+TEXT CONSTRAINTS (required for every element where type is "text"):
+- Include "constraints": { "maxCharacters": number, "maxLines": number, "overflowHandling": "SHRINK_TO_FIT" | "CLIP" | "WRAP" } on each text node. Choose values from the actual box size and fontSize (tight labels: few chars, 1 line; headlines: moderate chars, 1–3 lines; body: more chars, WRAP or SHRINK_TO_FIT).
+- overflowHandling: use SHRINK_TO_FIT for display/headline tiers when the renderer should scale; WRAP for paragraph-like copy; CLIP only when overflow must be hard-clipped.
+- For type "image" or "shape", set "constraints": null.
+
 BRAND & CONTACT (fixed):
 - brandName in "content" MUST be exactly "${APP_CONFIG.BRAND.DISPLAY_NAME}" (templates show this name).
 - email in "content" MUST be exactly "${APP_CONFIG.BRAND.CONTACT_EMAIL}".
@@ -347,7 +353,7 @@ OPTIONAL STOCK POOL (Pexels-oriented phrases — for canvas / role fallback):
 - content.imageQueries: 3 short phrases summarizing the niche/visual mood (still required).
 
 OUTPUT FORMAT
-Return ONLY a JSON object. No prose.
+Return ONLY a JSON object. No prose. Use a root-level "elements" array (OpenAI schema shape) with element_id, position, dimensions, style, content_placeholder, and constraints on every row (null for image/shape, full object for text).
 {
   "rationale": {
     "selected_archetype": "string",
@@ -379,7 +385,8 @@ Return ONLY a JSON object. No prose.
           "opacity": number,
           "letterSpacing": number
         },
-        "content_placeholder": "string"
+        "content_placeholder": "string",
+        "constraints": { "maxCharacters": 20, "maxLines": 2, "overflowHandling": "SHRINK_TO_FIT" }
       }
     ]
   },
@@ -469,7 +476,7 @@ Return ONLY a JSON object. No prose.
                 items: {
                   type: 'object',
                   additionalProperties: false,
-                  required: ['element_id', 'type', 'role', 'position', 'dimensions', 'style', 'content_placeholder'],
+                  required: ['element_id', 'type', 'role', 'position', 'dimensions', 'style', 'content_placeholder', 'constraints'],
                   properties: {
                     element_id: { type: 'string' },
                     type: { type: 'string', enum: ['text', 'image', 'shape'] },
@@ -491,7 +498,21 @@ Return ONLY a JSON object. No prose.
                     },
                     style: { type: 'object' },
                     content_placeholder: { type: 'string' },
-                    constraints: { type: 'object' },
+                    constraints: {
+                      anyOf: [
+                        {
+                          type: 'object',
+                          additionalProperties: false,
+                          required: ['maxCharacters', 'maxLines', 'overflowHandling'],
+                          properties: {
+                            maxCharacters: { type: 'integer', minimum: 1, maximum: 500 },
+                            maxLines: { type: 'integer', minimum: 1, maximum: 30 },
+                            overflowHandling: { type: 'string', enum: ['SHRINK_TO_FIT', 'CLIP', 'WRAP'] },
+                          },
+                        },
+                        { type: 'null' },
+                      ],
+                    },
                     textZone: { type: 'boolean' },
                   },
                 },
@@ -616,6 +637,62 @@ function normalizeStockPhotoQueries(
   };
 }
 
+function defaultConstraintsForTextRole(role: LlmSkeletonElement['role']): ElementConstraints {
+  switch (role) {
+    case 'BRAND_NAME':
+    case 'MENU_TITLE':
+      return { maxCharacters: 24, maxLines: 1, overflowHandling: 'SHRINK_TO_FIT' };
+    case 'PRODUCT_NAME':
+      return { maxCharacters: 20, maxLines: 1, overflowHandling: 'SHRINK_TO_FIT' };
+    case 'HEADLINE':
+      return { maxCharacters: 48, maxLines: 2, overflowHandling: 'SHRINK_TO_FIT' };
+    case 'DESCRIPTION':
+      return { maxCharacters: 100, maxLines: 3, overflowHandling: 'WRAP' };
+    case 'BODY_TEXT':
+      return { maxCharacters: 180, maxLines: 4, overflowHandling: 'WRAP' };
+    case 'PHONE_NUMBER':
+      return { maxCharacters: 28, maxLines: 1, overflowHandling: 'CLIP' };
+    default:
+      return { maxCharacters: 80, maxLines: 3, overflowHandling: 'WRAP' };
+  }
+}
+
+/** Ensures every text element has LLM-style constraints; merges partial LLM output with role defaults. */
+function mergeTextElementConstraints(
+  type: LlmSkeletonElement['type'],
+  role: LlmSkeletonElement['role'],
+  raw: unknown
+): ElementConstraints | undefined {
+  if (type !== 'text') return undefined;
+  const defaults = defaultConstraintsForTextRole(role);
+  if (raw == null || typeof raw !== 'object') return defaults;
+  const c = raw as Record<string, unknown>;
+  const maxChars = Number(c.maxCharacters);
+  const maxLines = Number(c.maxLines);
+  const oh = String(c.overflowHandling ?? '').trim();
+  const overflowOk =
+    oh === 'SHRINK_TO_FIT' || oh === 'CLIP' || oh === 'WRAP' ? oh : defaults.overflowHandling;
+  return {
+    maxCharacters:
+      Number.isFinite(maxChars) && maxChars > 0 ? Math.min(500, Math.round(maxChars)) : defaults.maxCharacters!,
+    maxLines: Number.isFinite(maxLines) && maxLines > 0 ? Math.min(30, Math.round(maxLines)) : defaults.maxLines!,
+    overflowHandling: overflowOk,
+  };
+}
+
+/** Exported for template build: coerce any text role + partial constraints to full ElementConstraints. */
+export function finalizeTextElementConstraints(
+  type: 'text' | 'image' | 'shape',
+  role: string,
+  raw: unknown
+): ElementConstraints | undefined {
+  return mergeTextElementConstraints(
+    type as LlmSkeletonElement['type'],
+    role as LlmSkeletonElement['role'],
+    raw
+  );
+}
+
 function normalizeContentPackage(raw: unknown, niche: string, category: string): ContentPackage {
   const o = raw as Record<string, unknown>;
   const rawQueries = Array.isArray(o.imageQueries) ? (o.imageQueries as unknown[]) : [];
@@ -730,7 +807,7 @@ function normalizeSkeletonWithContent(
         dimensions: { w: Math.max(20, Math.min(width, dwFinal)), h: Math.max(20, Math.min(height, dhFinal)) },
         style: styleRaw as Record<string, unknown>,
         z_index: Number.isFinite(Number(o.z_index)) ? (Number(o.z_index) as number) : undefined,
-        constraints: o.constraints && typeof o.constraints === 'object' ? (o.constraints as any) : undefined,
+        constraints: mergeTextElementConstraints(type, role, o.constraints),
         textZone: Boolean(o.textZone),
         content_placeholder:
           typeof o.content_placeholder === 'string' && o.content_placeholder.trim()
@@ -786,6 +863,7 @@ function normalizeSkeletonWithContent(
         position: { x: 60, y: 80 },
         dimensions: { w: width - 120, h: 120 },
         style: { fontFamily: 'Inter, sans-serif', fontSize: 56, fontWeight: 700, color: '$VAR_TEXT_SECONDARY', alignment: 'left' },
+        constraints: { maxCharacters: 56, maxLines: 2, overflowHandling: 'SHRINK_TO_FIT' },
         textZone: true,
       },
     ],
