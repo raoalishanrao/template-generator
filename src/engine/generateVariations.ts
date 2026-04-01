@@ -13,8 +13,12 @@ import type {
 } from '../types/schema.js';
 import type { ContentPackage } from '../types/schema.js';
 import { generateContentPackages, generateSkeletonAndContentPackage } from './contentExpansion.js';
-import { getContentForRole, getImageQueryForRole } from './semanticFitting.js';
-import { searchPhoto, getImageUrl } from './imageService.js';
+import {
+  getContentForRole,
+  getCanvasBackgroundStockQuery,
+  getStockPhotoQueryForRole,
+} from './semanticFitting.js';
+import { searchPhotoDeduped, getImageUrl } from './imageService.js';
 import {
   getDominantColor,
   getAccentFromPrimary,
@@ -374,59 +378,44 @@ async function buildTemplateFromPackage(
   let bgSecondaryHex = llmDesign?.colorPalette.$VAR_BG_SECONDARY ?? '#111827';
   let textMainHex = llmDesign?.colorPalette.$VAR_TEXT_MAIN ?? DARK_TEXT;
   let textSecondaryHex = llmDesign?.colorPalette.$VAR_TEXT_SECONDARY ?? '#FFFFFF';
-  let heroImageUrl = '';
 
-  const imageRoles: ElementRole[] = [
-    'BACKGROUND_IMAGE',
-    'HERO_IMAGE',
-    'PROMO_IMAGE_1',
-    'PROMO_IMAGE_2',
-    'PROMO_IMAGE_3',
-  ];
-  let imageIndex = 0;
+  const usedPhotoIds = new Set<string>();
+  const fetchDistinctPhotoUrl = async (query: string): Promise<string> => {
+    const q = String(query || '').trim() || `${subCategory || category} lifestyle`;
+    const photo = await searchPhotoDeduped(pexelsKey, q, imageOrientation, usedPhotoIds);
+    if (photo) {
+      usedPhotoIds.add(String(photo.id));
+      return getImageUrl(photo, 'regular');
+    }
+    return '';
+  };
 
-  for (const el of skeleton.elements) {
-    if (
-      el.type === 'image' &&
-      (el.role === 'BACKGROUND_IMAGE' || el.role === 'HERO_IMAGE' || el.role === 'PRODUCT_IMAGE')
-    ) {
-      const query = getImageQueryForRole(el.role, pkg, 0);
-      const photo = await searchPhoto(pexelsKey, query, imageOrientation);
-      if (photo) {
-        heroImageUrl = getImageUrl(photo, 'regular');
-        if (!llmDesign && !primaryHex) {
-          try {
-            const dominant = await getDominantColor(heroImageUrl);
-            bgPrimaryHex = dominant.hex;
-            bgSecondaryHex = getAccentFromPrimary(dominant.hex);
-            primaryHex = dominant.isDark ? '#FFFFFF' : '#111827';
-            accentHex = accentHex ?? (dominant.isDark ? '#FF6B6B' : '#FF6B6B');
-            textMainHex = dominant.isDark ? LIGHT_TEXT : DARK_TEXT;
-            textSecondaryHex = dominant.isDark ? '#FFD93D' : '#1A1A1A';
-          } catch {
-            bgPrimaryHex = '#1A1A2E';
-            bgSecondaryHex = '#16213E';
-            primaryHex = primaryHex ?? '#FFFFFF';
-            accentHex = accentHex ?? '#FF6B6B';
-            textMainHex = LIGHT_TEXT;
-            textSecondaryHex = '#FFD93D';
-          }
-        }
+  let canvasBgUrl = '';
+  if (llmDesign?.backgroundPreference !== 'color') {
+    canvasBgUrl = await fetchDistinctPhotoUrl(getCanvasBackgroundStockQuery(pkg));
+    if (canvasBgUrl && !llmDesign && !primaryHex) {
+      try {
+        const dominant = await getDominantColor(canvasBgUrl);
+        bgPrimaryHex = dominant.hex;
+        bgSecondaryHex = getAccentFromPrimary(dominant.hex);
+        primaryHex = dominant.isDark ? '#FFFFFF' : '#111827';
+        accentHex = accentHex ?? (dominant.isDark ? '#FF6B6B' : '#FF6B6B');
+        textMainHex = dominant.isDark ? LIGHT_TEXT : DARK_TEXT;
+        textSecondaryHex = dominant.isDark ? '#FFD93D' : '#1A1A1A';
+      } catch {
+        bgPrimaryHex = '#1A1A2E';
+        bgSecondaryHex = '#16213E';
+        primaryHex = primaryHex ?? '#FFFFFF';
+        accentHex = accentHex ?? '#FF6B6B';
+        textMainHex = LIGHT_TEXT;
+        textSecondaryHex = '#FFD93D';
       }
-      break;
     }
   }
 
-  // If we couldn't find a hero/background image via the primary query,
-  // try a broader fallback so templates still include imagery.
-  if (!heroImageUrl) {
+  if (!canvasBgUrl && llmDesign?.backgroundPreference !== 'color') {
     const fallbackQuery = `${subCategory || category} ${pkg.name || ''}`.trim();
-    try {
-      const photo = await searchPhoto(pexelsKey, fallbackQuery, imageOrientation);
-      if (photo) heroImageUrl = getImageUrl(photo, 'regular');
-    } catch {
-      // ignore, we'll fall back to color background
-    }
+    canvasBgUrl = await fetchDistinctPhotoUrl(fallbackQuery);
   }
 
   if (!primaryHex) primaryHex = '#FFFFFF';
@@ -448,8 +437,8 @@ async function buildTemplateFromPackage(
     unit: 'px',
     background: llmDesign?.backgroundPreference === 'color'
       ? { type: 'color', value: colorPalette.$VAR_BG_PRIMARY ?? bgPrimaryHex }
-      : heroImageUrl
-      ? { type: 'image', value: heroImageUrl }
+      : canvasBgUrl
+      ? { type: 'image', value: canvasBgUrl }
       : { type: 'color', value: bgPrimaryHex },
     colorPalette,
   };
@@ -464,7 +453,11 @@ async function buildTemplateFromPackage(
 
     let content: string | null = null;
     if (el.type === 'text') {
+      if (el.role === 'BRAND_NAME') {
+        content = APP_CONFIG.BRAND.DISPLAY_NAME;
+      } else {
         content = el.content && String(el.content).trim() ? String(el.content) : getContentForRole(el.role, pkg);
+      }
       if (el.role === 'LOGO' && (!content || !content.trim())) {
         content = llmDesign?.logoText || pkg.brandName;
       }
@@ -482,16 +475,13 @@ async function buildTemplateFromPackage(
     } else if (el.type === 'image') {
       if (el.role === 'LOGO') {
         content = APP_CONFIG.ASSETS.LOGO_URL;
-      } else if (
-        (el.role === 'BACKGROUND_IMAGE' || el.role === 'HERO_IMAGE' || el.role === 'PRODUCT_IMAGE') &&
-        heroImageUrl
-      ) {
-        content = heroImageUrl;
       } else {
-        const query = getImageQueryForRole(el.role, pkg, imageIndex);
-        const photo = await searchPhoto(pexelsKey, query, imageOrientation);
-        content = photo ? getImageUrl(photo, 'regular') : heroImageUrl || null;
-        imageIndex++;
+        const query = getStockPhotoQueryForRole(el.role, pkg);
+        let url = await fetchDistinctPhotoUrl(query);
+        if (!url && (el.role === 'BACKGROUND_IMAGE' || el.role === 'HERO_IMAGE' || el.role === 'PRODUCT_IMAGE')) {
+          url = await fetchDistinctPhotoUrl(`${query} different angle`);
+        }
+        content = url || null;
       }
     }
 
@@ -533,7 +523,7 @@ async function buildTemplateFromPackage(
     const wantsOverlay =
       el.type === 'text' &&
       (el as unknown as { textZone?: boolean }).textZone &&
-      (heroImageUrl || elements.some((e) => e.type === 'image')) &&
+      (Boolean(canvasBgUrl) || elements.some((e) => e.type === 'image')) &&
       el.role !== 'CTA'; // CTA already uses accent background
 
     if (wantsOverlay) {

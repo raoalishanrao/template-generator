@@ -4,6 +4,11 @@ export const APP_CONFIG = {
   OPENAI_MODEL: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
   GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
   DEBUG_PROMPTS: process.env.DEBUG_PROMPTS === 'true',
+  /** Fixed product branding for generated templates (copy + logo treatment). */
+  BRAND: {
+    DISPLAY_NAME: 'Konvert',
+    CONTACT_EMAIL: process.env.KONVRT_CONTACT_EMAIL || 'hello@konvrt.com',
+  },
   KEYS: {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
     OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',

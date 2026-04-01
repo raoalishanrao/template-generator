@@ -157,6 +157,18 @@ export interface GenerateVariationsInput {
   };
 }
 
+/**
+ * Distinct Pexels search phrases so full-bleed canvas and inset/hero images are not duplicates.
+ */
+export interface StockPhotoQueries {
+  fullBleedBackground: string;
+  framedFocus: string;
+  productDetail: string;
+  promo1: string;
+  promo2: string;
+  promo3: string;
+}
+
 export interface ContentPackage {
   brandName: string;
   menuTitle: string;
@@ -168,5 +180,7 @@ export interface ContentPackage {
   subhead: string;
   bodyText: string;
   imageQueries: string[];
+  /** Layer-specific stock search terms (preferred over imageQueries for image placement). */
+  stockPhotoQueries: StockPhotoQueries;
   name: string;
 }
