@@ -8,7 +8,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
-import type { ContentPackage } from '../types/schema.js';
+import type { ContentPackage, ElementConstraints, StockPhotoQueries } from '../types/schema.js';
 import { APP_CONFIG } from '../config/constants.js';
 
 export interface LlmSkeletonElement {
@@ -33,7 +33,8 @@ export interface LlmSkeletonElement {
   dimensions: { w: number; h: number };
   style: Record<string, unknown>;
   z_index?: number;
-  constraints?: { maxCharacters?: number; maxLines?: number };
+  /** Present for every text element after normalization (image/shape omit). */
+  constraints?: ElementConstraints;
   textZone?: boolean;
   content_placeholder?: string;
 }
@@ -73,6 +74,18 @@ export async function generateContentPackages(
   const prompt = `You are a senior brand strategist, creative director, and editorial copywriter creating production-ready social template content.
 Brand context: niche="${niche}", category="${category}".${marketingGoal ? ` Marketing goal: ${marketingGoal}.` : ''}
 
+Fixed brand (always use exactly — do not invent a different company name):
+- brandName: "${APP_CONFIG.BRAND.DISPLAY_NAME}" (exact spelling and casing)
+- email: "${APP_CONFIG.BRAND.CONTACT_EMAIL}" (exact copy)
+- Copy may describe the niche (e.g. pizza, coffee) but the trade name shown on templates is always ${APP_CONFIG.BRAND.DISPLAY_NAME}.
+
+Stock photography via Pexels (critical):
+- Return stockPhotoQueries with six DISTINCT short search phrases (no brand names). Each phrase must describe a different scene/subject so the API does not return the same photo twice (e.g. wide dining room blur vs. plated pizza top-down vs. flour-on-board macro).
+- fullBleedBackground = atmospheric wide shot for the **full canvas** behind UI.
+- framedFocus = **inset/main** hero image (e.g. one plated dish), different from fullBleedBackground.
+- productDetail = complementary **detail** (hands, ingredient texture, close macro) — not the same wording as framedFocus.
+- promo1, promo2, promo3 = three more **different** phrases for tile/mosaic slots.
+
 Output quality requirements:
 - Mature, polished, premium tone. Human and specific, never generic.
 - Avoid clichés, filler, and hype language.
@@ -91,21 +104,22 @@ Generate exactly ${count} distinct content packages with varied creative angles 
 For each package return a JSON object with ALL fields present and NON-EMPTY strings (never null/undefined/empty).
 If real details are unknown, invent realistic placeholders:
 - phone: realistic phone number
-- email: realistic email
 - address: realistic short street/city line
+- email must be exactly "${APP_CONFIG.BRAND.CONTACT_EMAIL}"
 
 Return a JSON object with:
-- brandName: string (4-14 chars, uppercase preferred)
+- brandName: must be exactly "${APP_CONFIG.BRAND.DISPLAY_NAME}"
 - menuTitle: string (under 20 chars; refined and specific)
 - productName: string (under 18 chars)
 - phone: string (e.g. "+1 (212) 555-0198")
-- email: string (e.g. "hello@brandname.com")
+- email: must be exactly "${APP_CONFIG.BRAND.CONTACT_EMAIL}"
 - address: string (e.g. "12 Grove St, New York")
 - name: short internal title for this variation (e.g. "Afternoon Ritual")
 - headline: string (short, punchy, under 40 chars)
 - subhead: string (supporting line, under 60 chars)
 - bodyText: string (one supporting line; under 90 chars)
-- imageQueries: string[] (REQUIRED, 2-3 short photo search phrases for stock photo search; avoid brand names; examples: "latte art close-up", "cozy coffee shop interior", "fresh pastry display")
+- imageQueries: string[] (REQUIRED, 3 short phrases; supplementary to stockPhotoQueries)
+- stockPhotoQueries: object with fullBleedBackground, framedFocus, productDetail, promo1, promo2, promo3 (each a distinct Pexels-oriented phrase)
 
 Output ONLY a valid JSON array of ${count} objects, no markdown or explanation. Example format:
 [{\"name\":\"...\",\"headline\":\"...\"},{\"name\":\"...\",...}]`;
@@ -152,6 +166,7 @@ Output ONLY a valid JSON array of ${count} objects, no markdown or explanation. 
                     'subhead',
                     'bodyText',
                     'imageQueries',
+                    'stockPhotoQueries',
                   ],
                   properties: {
                     brandName: { type: 'string', minLength: 3 },
@@ -166,9 +181,29 @@ Output ONLY a valid JSON array of ${count} objects, no markdown or explanation. 
                     bodyText: { type: 'string', minLength: 8 },
                     imageQueries: {
                       type: 'array',
-                      minItems: 2,
+                      minItems: 3,
                       maxItems: 3,
                       items: { type: 'string' },
+                    },
+                    stockPhotoQueries: {
+                      type: 'object',
+                      additionalProperties: false,
+                      required: [
+                        'fullBleedBackground',
+                        'framedFocus',
+                        'productDetail',
+                        'promo1',
+                        'promo2',
+                        'promo3',
+                      ],
+                      properties: {
+                        fullBleedBackground: { type: 'string', minLength: 4 },
+                        framedFocus: { type: 'string', minLength: 4 },
+                        productDetail: { type: 'string', minLength: 4 },
+                        promo1: { type: 'string', minLength: 4 },
+                        promo2: { type: 'string', minLength: 4 },
+                        promo3: { type: 'string', minLength: 4 },
+                      },
                     },
                   },
                 },
@@ -256,7 +291,6 @@ export async function generateSkeletonAndContentPackage(
     tone?: string;
   }
 ): Promise<LlmSkeletonWithContent> {
-  const allowedFonts = ['Manrope', 'DM Sans', 'Fraunces', 'Space Grotesk', 'Poppins', 'Montserrat', 'Playfair Display'];
   const gridUnit = Math.max(4, Math.round(Math.min(width, height) / 36));
   const prompt = `ROLE
 You are a Senior Art Director & Systems Designer. Your task is to architect a high-converting, Canva-quality template skeleton.
@@ -286,19 +320,40 @@ Pinterest: Maximize vertical scannability. Use large, high-contrast headline blo
 60-30-10 Rule: 60% Background, 30% Secondary/Shapes, 10% Accent/CTA.
 Typographic Scale: HEADLINE size must be at least 2.5x the BODY_TEXT size.
 The Grid: Snap all X/Y coordinates to a 12-column grid (multiples of ${gridUnit}px).
-The Visual Anchor: Every design needs one “Hero.” If it’s a PRODUCT_IMAGE, the text must support it, not fight it.
+The Visual Anchor: Strong focal point can be **photography**, **typography**, **color fields**, or **shapes** — not every layout needs a photo. If you use a PRODUCT_IMAGE or mosaic, text must support the hero, not fight it.
 Proximity & White Space: Group related items (Address + Phone) together. Maintain a “Safe Zone” of 10% of the canvas width on all edges.
 Typographic Scale Enforcement: Use a clear hierarchy. The HEADLINE must be at least 2.5x the size of the BODY_TEXT to create depth.
 
 PHASE 2: TECHNICAL SPECIFICATIONS
-Fonts: Only use: ${allowedFonts.join(', ')}.
+Typography: Pick professional, legible typefaces that fit the archetype and niche — you are not limited to a fixed list. Use well-known, production-ready families (e.g. Google Fonts, common web/system fonts). For each text element, set style.fontFamily as a real CSS font stack when possible (e.g. "Fraunces, serif" or "Outfit, sans-serif"). In design.fontPairing, name heading and body faces that match what you used in the skeleton. Pair a strong display face for headlines with a clear body face; avoid gimmicky or obscure names.
 Color Palette: Use variables ($VAR_BG, $VAR_PRIMARY, $VAR_ACCENT, $VAR_TEXT) to ensure dynamic behavior.
 Visual Weight: Balance a large image in one quadrant with text in the opposite quadrant.
 
 Rule: Every element MUST include content_placeholder (string). For text elements, it must be the exact label to render (including CTA/action labels).
 
+TEXT CONSTRAINTS (required for every element where type is "text"):
+- Include "constraints": { "maxCharacters": number, "maxLines": number, "overflowHandling": "SHRINK_TO_FIT" | "CLIP" | "WRAP" } on each text node. Choose values from the actual box size and fontSize (tight labels: few chars, 1 line; headlines: moderate chars, 1–3 lines; body: more chars, WRAP or SHRINK_TO_FIT).
+- overflowHandling: use SHRINK_TO_FIT for display/headline tiers when the renderer should scale; WRAP for paragraph-like copy; CLIP only when overflow must be hard-clipped.
+- For type "image" or "shape", set "constraints": null.
+
+BRAND & CONTACT (fixed):
+- brandName in "content" MUST be exactly "${APP_CONFIG.BRAND.DISPLAY_NAME}" (templates show this name).
+- email in "content" MUST be exactly "${APP_CONFIG.BRAND.CONTACT_EMAIL}".
+- design.logoText should be "${APP_CONFIG.BRAND.DISPLAY_NAME}" or a short uppercase variant of it.
+- A LOGO image element should use a text placeholder like "LOGO"; the app injects the real Konvrt logo asset.
+
+IMAGERY — YOU CHOOSE THE COUNT (0 to many):
+- Decide how many **raster** photos the design needs: **zero** (type-led layout with shapes + color/gradient), **one** focal image, or **several** for split layouts / mosaics. More images is not always better; match the archetype.
+- Image roles: BACKGROUND_IMAGE (optional full-bleed behind UI), PRODUCT_IMAGE, PROMO_IMAGE_1 / _2 / _3, LOGO (asset). Omit image elements entirely if the layout is typography- or color-only; then set design.backgroundPreference to "color" or "gradient", not "image".
+- For **each** non-LOGO image element, set content_placeholder to a **unique** short Pexels search phrase (no brand names). If you leave it empty, the app maps the role to optional content.stockPhotoQueries pools below.
+- Avoid duplicate roles only for LOGO and BACKGROUND_IMAGE (at most one each). You may use multiple PRODUCT_IMAGE or promo slots for grids.
+
+OPTIONAL STOCK POOL (Pexels-oriented phrases — for canvas / role fallback):
+- content.stockPhotoQueries may include any of: fullBleedBackground (wide soft scene for canvas fill), framedFocus, productDetail, promo1, promo2, promo3. Each phrase should differ when present; omitted entries are filled automatically.
+- content.imageQueries: 3 short phrases summarizing the niche/visual mood (still required).
+
 OUTPUT FORMAT
-Return ONLY a JSON object. No prose.
+Return ONLY a JSON object. No prose. Use a root-level "elements" array (OpenAI schema shape) with element_id, position, dimensions, style, content_placeholder, and constraints on every row (null for image/shape, full object for text).
 {
   "rationale": {
     "selected_archetype": "string",
@@ -330,7 +385,8 @@ Return ONLY a JSON object. No prose.
           "opacity": number,
           "letterSpacing": number
         },
-        "content_placeholder": "string"
+        "content_placeholder": "string",
+        "constraints": { "maxCharacters": 20, "maxLines": 2, "overflowHandling": "SHRINK_TO_FIT" }
       }
     ]
   },
@@ -345,7 +401,15 @@ Return ONLY a JSON object. No prose.
     "headline": "string",
     "subhead": "string",
     "bodyText": "string",
-    "imageQueries": ["string", "string"]
+    "imageQueries": ["string", "string", "string"],
+    "stockPhotoQueries": {
+      "fullBleedBackground": "string (optional)",
+      "framedFocus": "string (optional)",
+      "productDetail": "string (optional)",
+      "promo1": "string (optional)",
+      "promo2": "string (optional)",
+      "promo3": "string (optional)"
+    }
   }
 }`;
 
@@ -408,11 +472,11 @@ Return ONLY a JSON object. No prose.
               elements: {
                 type: 'array',
                 minItems: 4,
-                maxItems: 10,
+                maxItems: 16,
                 items: {
                   type: 'object',
                   additionalProperties: false,
-                  required: ['element_id', 'type', 'role', 'position', 'dimensions', 'style', 'content_placeholder'],
+                  required: ['element_id', 'type', 'role', 'position', 'dimensions', 'style', 'content_placeholder', 'constraints'],
                   properties: {
                     element_id: { type: 'string' },
                     type: { type: 'string', enum: ['text', 'image', 'shape'] },
@@ -434,7 +498,21 @@ Return ONLY a JSON object. No prose.
                     },
                     style: { type: 'object' },
                     content_placeholder: { type: 'string' },
-                    constraints: { type: 'object' },
+                    constraints: {
+                      anyOf: [
+                        {
+                          type: 'object',
+                          additionalProperties: false,
+                          required: ['maxCharacters', 'maxLines', 'overflowHandling'],
+                          properties: {
+                            maxCharacters: { type: 'integer', minimum: 1, maximum: 500 },
+                            maxLines: { type: 'integer', minimum: 1, maximum: 30 },
+                            overflowHandling: { type: 'string', enum: ['SHRINK_TO_FIT', 'CLIP', 'WRAP'] },
+                          },
+                        },
+                        { type: 'null' },
+                      ],
+                    },
                     textZone: { type: 'boolean' },
                   },
                 },
@@ -442,7 +520,19 @@ Return ONLY a JSON object. No prose.
               content: {
                 type: 'object',
                 additionalProperties: false,
-                required: ['brandName', 'menuTitle', 'productName', 'phone', 'email', 'address', 'name', 'headline', 'subhead', 'bodyText', 'imageQueries'],
+                required: [
+                  'brandName',
+                  'menuTitle',
+                  'productName',
+                  'phone',
+                  'email',
+                  'address',
+                  'name',
+                  'headline',
+                  'subhead',
+                  'bodyText',
+                  'imageQueries',
+                ],
                 properties: {
                   brandName: { type: 'string', minLength: 3 },
                   menuTitle: { type: 'string', minLength: 4 },
@@ -454,7 +544,19 @@ Return ONLY a JSON object. No prose.
                   headline: { type: 'string', minLength: 6 },
                   subhead: { type: 'string', minLength: 8 },
                   bodyText: { type: 'string', minLength: 8 },
-                  imageQueries: { type: 'array', minItems: 2, maxItems: 3, items: { type: 'string' } },
+                  imageQueries: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'string' } },
+                  stockPhotoQueries: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      fullBleedBackground: { type: 'string' },
+                      framedFocus: { type: 'string' },
+                      productDetail: { type: 'string' },
+                      promo1: { type: 'string' },
+                      promo2: { type: 'string' },
+                      promo3: { type: 'string' },
+                    },
+                  },
                 },
               },
             },
@@ -493,40 +595,146 @@ function extractOpenAIText(resp: any): string | undefined {
   return undefined;
 }
 
+function buildDefaultStockPhotoQueries(
+  niche: string,
+  category: string,
+  imageQueries: string[]
+): StockPhotoQueries {
+  const a = imageQueries[0] || `${niche} venue interior wide`;
+  const b = imageQueries[1] || `${niche} hero dish plating`;
+  const c = imageQueries[2] || `${category} ingredient texture macro`;
+  return {
+    fullBleedBackground: `${a} wide soft-focus ambient background`,
+    framedFocus: `${b} single subject hero centered`,
+    productDetail: `${c} complementary close-up detail`,
+    promo1: `${niche} lifestyle alternate angle`,
+    promo2: `${niche} overhead hands serving`,
+    promo3: `${niche} rustic surface macro`,
+  };
+}
+
+function normalizeStockPhotoQueries(
+  raw: Record<string, unknown>,
+  niche: string,
+  category: string,
+  imageQueries: string[]
+): StockPhotoQueries {
+  const defaults = buildDefaultStockPhotoQueries(niche, category, imageQueries);
+  const sp = raw.stockPhotoQueries;
+  if (!sp || typeof sp !== 'object') return defaults;
+  const obj = sp as Record<string, unknown>;
+  const pick = (key: keyof StockPhotoQueries): string => {
+    const v = cleanText(obj[key]);
+    return v || defaults[key];
+  };
+  return {
+    fullBleedBackground: pick('fullBleedBackground'),
+    framedFocus: pick('framedFocus'),
+    productDetail: pick('productDetail'),
+    promo1: pick('promo1'),
+    promo2: pick('promo2'),
+    promo3: pick('promo3'),
+  };
+}
+
+function defaultConstraintsForTextRole(role: LlmSkeletonElement['role']): ElementConstraints {
+  switch (role) {
+    case 'BRAND_NAME':
+    case 'MENU_TITLE':
+      return { maxCharacters: 24, maxLines: 1, overflowHandling: 'SHRINK_TO_FIT' };
+    case 'PRODUCT_NAME':
+      return { maxCharacters: 20, maxLines: 1, overflowHandling: 'SHRINK_TO_FIT' };
+    case 'HEADLINE':
+      return { maxCharacters: 48, maxLines: 2, overflowHandling: 'SHRINK_TO_FIT' };
+    case 'DESCRIPTION':
+      return { maxCharacters: 100, maxLines: 3, overflowHandling: 'WRAP' };
+    case 'BODY_TEXT':
+      return { maxCharacters: 180, maxLines: 4, overflowHandling: 'WRAP' };
+    case 'PHONE_NUMBER':
+      return { maxCharacters: 28, maxLines: 1, overflowHandling: 'CLIP' };
+    default:
+      return { maxCharacters: 80, maxLines: 3, overflowHandling: 'WRAP' };
+  }
+}
+
+/** Ensures every text element has LLM-style constraints; merges partial LLM output with role defaults. */
+function mergeTextElementConstraints(
+  type: LlmSkeletonElement['type'],
+  role: LlmSkeletonElement['role'],
+  raw: unknown
+): ElementConstraints | undefined {
+  if (type !== 'text') return undefined;
+  const defaults = defaultConstraintsForTextRole(role);
+  if (raw == null || typeof raw !== 'object') return defaults;
+  const c = raw as Record<string, unknown>;
+  const maxChars = Number(c.maxCharacters);
+  const maxLines = Number(c.maxLines);
+  const oh = String(c.overflowHandling ?? '').trim();
+  const overflowOk =
+    oh === 'SHRINK_TO_FIT' || oh === 'CLIP' || oh === 'WRAP' ? oh : defaults.overflowHandling;
+  return {
+    maxCharacters:
+      Number.isFinite(maxChars) && maxChars > 0 ? Math.min(500, Math.round(maxChars)) : defaults.maxCharacters!,
+    maxLines: Number.isFinite(maxLines) && maxLines > 0 ? Math.min(30, Math.round(maxLines)) : defaults.maxLines!,
+    overflowHandling: overflowOk,
+  };
+}
+
+/** Exported for template build: coerce any text role + partial constraints to full ElementConstraints. */
+export function finalizeTextElementConstraints(
+  type: 'text' | 'image' | 'shape',
+  role: string,
+  raw: unknown
+): ElementConstraints | undefined {
+  return mergeTextElementConstraints(
+    type as LlmSkeletonElement['type'],
+    role as LlmSkeletonElement['role'],
+    raw
+  );
+}
+
 function normalizeContentPackage(raw: unknown, niche: string, category: string): ContentPackage {
   const o = raw as Record<string, unknown>;
   const rawQueries = Array.isArray(o.imageQueries) ? (o.imageQueries as unknown[]) : [];
-  const imageQueries = rawQueries
+  let imageQueries = rawQueries
     .map((q) => (q == null ? '' : String(q)).trim())
     .filter(Boolean)
     .slice(0, 3);
 
-  const brandName = cleanText(o.brandName);
+  const defaultQueries = [
+    `${niche} product close-up`,
+    `${niche} lifestyle scene`,
+    `${category} background texture`,
+  ];
+  if (imageQueries.length < 3) {
+    for (let i = imageQueries.length; i < 3; i++) {
+      imageQueries.push(defaultQueries[i]);
+    }
+  }
+  if (imageQueries.length === 0) {
+    imageQueries = [...defaultQueries];
+  }
+
+  const stockPhotoQueries = normalizeStockPhotoQueries(o, niche, category, imageQueries);
+
   const menuTitle = cleanText(o.menuTitle);
   const productName = cleanText(o.productName);
   const phone = cleanText(o.phone);
-  const email = cleanText(o.email);
   const address = cleanText(o.address);
 
   return {
-    brandName: truncate(brandName || niche.split(/\s+/).slice(0, 2).join(' ').toUpperCase(), 18),
+    brandName: APP_CONFIG.BRAND.DISPLAY_NAME,
     menuTitle: truncate(menuTitle || 'SIGNATURE SELECTION', 22),
     productName: truncate(productName || niche.split(/\s+/)[0]?.toUpperCase() || 'SIGNATURE', 18),
     phone: phone || '+1 (212) 555-0198',
-    email: email || `hello@${(brandName || 'brand').toLowerCase().replace(/[^a-z0-9]/g, '')}.com`,
+    email: APP_CONFIG.BRAND.CONTACT_EMAIL,
     address: truncate(address || '12 Grove St, New York', 44),
     name: truncate(String(o.name ?? 'Untitled'), 32),
     headline: truncate(cleanText(o.headline) || 'A refined daily ritual', 42),
     subhead: truncate(cleanText(o.subhead) || 'A refined daily ritual, in every cup.', 64),
     bodyText: truncate(cleanText(o.bodyText) || 'Crafted with care, served with ease.', 84),
-    imageQueries:
-      imageQueries.length > 0
-        ? imageQueries
-        : [
-            `${niche} product close-up`,
-            `${niche} lifestyle`,
-            `${category} background texture`,
-          ].slice(0, 3),
+    imageQueries,
+    stockPhotoQueries,
   };
 }
 
@@ -599,7 +807,7 @@ function normalizeSkeletonWithContent(
         dimensions: { w: Math.max(20, Math.min(width, dwFinal)), h: Math.max(20, Math.min(height, dhFinal)) },
         style: styleRaw as Record<string, unknown>,
         z_index: Number.isFinite(Number(o.z_index)) ? (Number(o.z_index) as number) : undefined,
-        constraints: o.constraints && typeof o.constraints === 'object' ? (o.constraints as any) : undefined,
+        constraints: mergeTextElementConstraints(type, role, o.constraints),
         textZone: Boolean(o.textZone),
         content_placeholder:
           typeof o.content_placeholder === 'string' && o.content_placeholder.trim()
@@ -626,14 +834,14 @@ function normalizeSkeletonWithContent(
       $VAR_TEXT_SECONDARY: String(cpRaw.$VAR_TEXT_SECONDARY ?? cpRawAlt.$VAR_TEXT_SECONDARY ?? '#FFFFFF'),
     },
     fontPairing: {
-      heading: cleanText(fpRaw.heading) || 'Manrope',
-      body: cleanText(fpRaw.body) || 'DM Sans',
+      heading: cleanText(fpRaw.heading) || 'Inter',
+      body: cleanText(fpRaw.body) || 'Inter',
       accent: cleanText(fpRaw.accent) || undefined,
     },
     backgroundPreference: ['image', 'color', 'gradient'].includes(String(designRaw.backgroundPreference))
       ? (String(designRaw.backgroundPreference) as 'image' | 'color' | 'gradient')
       : 'image',
-    logoText: cleanText(designRaw.logoText) || content.brandName || 'BRAND',
+    logoText: cleanText(designRaw.logoText) || APP_CONFIG.BRAND.DISPLAY_NAME,
   };
   return {
     skeletonName: cleanText(raw.skeletonName) || 'Runtime LLM Skeleton',
@@ -654,7 +862,8 @@ function normalizeSkeletonWithContent(
         role: 'HEADLINE',
         position: { x: 60, y: 80 },
         dimensions: { w: width - 120, h: 120 },
-        style: { fontFamily: 'Manrope, sans-serif', fontSize: 56, fontWeight: 700, color: '$VAR_TEXT_SECONDARY', alignment: 'left' },
+        style: { fontFamily: 'Inter, sans-serif', fontSize: 56, fontWeight: 700, color: '$VAR_TEXT_SECONDARY', alignment: 'left' },
+        constraints: { maxCharacters: 56, maxLines: 2, overflowHandling: 'SHRINK_TO_FIT' },
         textZone: true,
       },
     ],
