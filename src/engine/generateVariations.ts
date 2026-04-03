@@ -17,18 +17,9 @@ import { resolveTemplateTaxonomy, buildTemplateIndexTags } from '../config/templ
 import type { ResolvedTemplateTaxonomy } from '../config/templateTaxonomy.js';
 import type { ContentPackage } from '../types/schema.js';
 import { generateSkeletonAndContentPackage, finalizeTextElementConstraints } from './contentExpansion.js';
-import {
-  getContentForRole,
-  getCanvasBackgroundStockQuery,
-  getStockPhotoQueryForRole,
-} from './semanticFitting.js';
+import { getContentForRole, getStockPhotoQueryForRole } from './semanticFitting.js';
 import { searchPhotoDeduped, getImageUrl } from './imageService.js';
-import {
-  getDominantColor,
-  getAccentFromPrimary,
-  LIGHT_TEXT,
-  DARK_TEXT,
-} from './colorExtraction.js';
+import { LIGHT_TEXT, DARK_TEXT } from './colorExtraction.js';
 import { randomUUID } from 'crypto';
 import { APP_CONFIG } from '../config/constants.js';
 interface RuntimeSkeleton {
@@ -296,7 +287,8 @@ function simplifySkeletonForElegance(skeleton: RuntimeSkeleton): RuntimeSkeleton
       textRolesSeen.add(el.role);
     }
     if (el.type === 'image') {
-      if (el.role === 'LOGO' || el.role === 'BACKGROUND_IMAGE') {
+      if (el.role === 'BACKGROUND_IMAGE') continue;
+      if (el.role === 'LOGO') {
         if (primaryImageRolesSeen.has(el.role)) continue;
         primaryImageRolesSeen.add(el.role);
       }
@@ -394,34 +386,7 @@ async function buildTemplateFromPackage(
     return '';
   };
 
-  let canvasBgUrl = '';
-  if (llmDesign?.backgroundPreference !== 'color') {
-    canvasBgUrl = await fetchDistinctPhotoUrl(getCanvasBackgroundStockQuery(pkg));
-    if (canvasBgUrl && !llmDesign && !primaryHex) {
-      try {
-        const dominant = await getDominantColor(canvasBgUrl);
-        bgPrimaryHex = dominant.hex;
-        bgSecondaryHex = getAccentFromPrimary(dominant.hex);
-        primaryHex = dominant.isDark ? '#FFFFFF' : '#111827';
-        accentHex = accentHex ?? (dominant.isDark ? '#FF6B6B' : '#FF6B6B');
-        textMainHex = dominant.isDark ? LIGHT_TEXT : DARK_TEXT;
-        textSecondaryHex = dominant.isDark ? '#FFD93D' : '#1A1A1A';
-      } catch {
-        bgPrimaryHex = '#1A1A2E';
-        bgSecondaryHex = '#16213E';
-        primaryHex = primaryHex ?? '#FFFFFF';
-        accentHex = accentHex ?? '#FF6B6B';
-        textMainHex = LIGHT_TEXT;
-        textSecondaryHex = '#FFD93D';
-      }
-    }
-  }
-
-  if (!canvasBgUrl && llmDesign?.backgroundPreference !== 'color') {
-    const fallbackQuery = `${taxonomy.subCategoryLabel || taxonomy.categoryLabel} ${pkg.name || ''}`.trim();
-    canvasBgUrl = await fetchDistinctPhotoUrl(fallbackQuery);
-  }
-
+  // Canvas uses solid color only (no full-bleed background photo on template JSON).
   if (!primaryHex) primaryHex = '#FFFFFF';
   if (!accentHex) accentHex = '#FF6B6B';
 
@@ -439,11 +404,7 @@ async function buildTemplateFromPackage(
     width: target.width,
     height: target.height,
     unit: 'px',
-    background: llmDesign?.backgroundPreference === 'color'
-      ? { type: 'color', value: colorPalette.$VAR_BG_PRIMARY ?? bgPrimaryHex }
-      : canvasBgUrl
-      ? { type: 'image', value: canvasBgUrl }
-      : { type: 'color', value: bgPrimaryHex },
+    background: { type: 'color', value: colorPalette.$VAR_BG_PRIMARY ?? bgPrimaryHex },
     colorPalette,
   };
 
@@ -454,6 +415,18 @@ async function buildTemplateFromPackage(
   let stockImageSlot = 0;
 
   for (const el of skeleton.elements) {
+    if (el.type === 'image' && el.role === 'BACKGROUND_IMAGE') {
+      continue;
+    }
+    if (el.type === 'shape' && el.role === 'DECORATIVE') {
+      const bw = skeleton.canvas.width;
+      const bh = skeleton.canvas.height;
+      const dw = Number(el.dimensions.w);
+      const dh = Number(el.dimensions.h);
+      if (bw > 0 && bh > 0 && dw >= bw * 0.85 && dh >= bh * 0.85) {
+        continue;
+      }
+    }
     if (el.role === 'LOGO' && !pkg.showBrandLogoImage) {
       continue;
     }
@@ -517,12 +490,7 @@ async function buildTemplateFromPackage(
     }
 
     const style = { ...el.style } as Record<string, unknown>;
-    if (style.color === '$VAR_TEXT') (style as { color: string }).color = textMainHex;
-    if (style.color === '$VAR_TEXT_MAIN') (style as { color: string }).color = textMainHex;
-    if (style.color === '$VAR_TEXT_SECONDARY') (style as { color: string }).color = textSecondaryHex;
-    if (style.color === '$VAR_ACCENT') (style as { color: string }).color = colorPalette.$VAR_ACCENT ?? '#FFD93D';
-    if (style.fill === '$VAR_ACCENT') (style as { fill: string }).fill = colorPalette.$VAR_ACCENT ?? '#FFD93D';
-    if (style.backgroundColor === '$VAR_ACCENT') (style as { backgroundColor: string }).backgroundColor = accentHex;
+    resolvePaletteTokensInStyle(style, colorPalette, accentHex);
 
     const isHeadline = el.role === 'HEADLINE';
     const fontSize = isHeadline ? Math.max(48, (el.style.fontSize as number) ?? 48) : (el.style.fontSize as number);
@@ -548,7 +516,7 @@ async function buildTemplateFromPackage(
     const wantsOverlay =
       el.type === 'text' &&
       (el as unknown as { textZone?: boolean }).textZone &&
-      (Boolean(canvasBgUrl) || elements.some((e) => e.type === 'image')) &&
+      elements.some((e) => e.type === 'image') &&
       el.role !== 'CTA'; // CTA already uses accent background
 
     if (wantsOverlay) {
@@ -669,8 +637,70 @@ async function buildTemplateFromPackage(
     scope: matchScope,
     created_at: now,
     updated_at: now,
-    elements: stabilizeElements(elements.sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0)), canvas),
+    elements: stabilizeElements(normalizeStackingOrder(elements), canvas),
   };
+}
+
+/**
+ * Map design-token strings on styles to real hex so downstream apps never see invalid keys like $VAR_BG.
+ */
+function resolvePaletteTokensInStyle(
+  style: Record<string, unknown>,
+  cp: Canvas['colorPalette'],
+  accentFallback: string,
+): void {
+  const bgP = cp.$VAR_BG_PRIMARY ?? '#0F172A';
+  const bgS = cp.$VAR_BG_SECONDARY ?? '#111827';
+  const primary = cp.$VAR_PRIMARY ?? '#FFFFFF';
+  const secondary = cp.$VAR_SECONDARY ?? '#FFFFFF';
+  const accent = cp.$VAR_ACCENT ?? accentFallback;
+  const textMain = cp.$VAR_TEXT_MAIN ?? '#111827';
+  const textSec = cp.$VAR_TEXT_SECONDARY ?? '#FFFFFF';
+
+  const map: Record<string, string> = {
+    $VAR_BG: bgP,
+    $VAR_BG_PRIMARY: bgP,
+    $VAR_BG_SECONDARY: bgS,
+    $VAR_PRIMARY: primary,
+    $VAR_SECONDARY: secondary,
+    $VAR_ACCENT: accent,
+    $VAR_TEXT: textMain,
+    $VAR_TEXT_MAIN: textMain,
+    $VAR_TEXT_SECONDARY: textSec,
+  };
+
+  for (const key of ['color', 'fill', 'stroke', 'backgroundColor'] as const) {
+    const v = style[key];
+    if (typeof v === 'string' && v in map) {
+      (style as Record<string, string>)[key] = map[v];
+    }
+  }
+}
+
+/**
+ * - Assign unique zIndex 0..n-1 (higher = on top for z-index–aware renderers).
+ * - Emit array in paint order for **array-order** renderers (first item = bottom): all non-text
+ *   layers first (sorted by z then build order), then all text (same). Decorative bars/shapes
+ *   no longer appear after copy in the list.
+ */
+function normalizeStackingOrder(elements: TemplateElement[]): TemplateElement[] {
+  const tagged = elements.map((el, stackIndex) => ({ el, stackIndex }));
+  const isText = (t: (typeof tagged)[number]) => t.el.type === 'text';
+  const nonText = tagged.filter((t) => !isText(t));
+  const text = tagged.filter(isText);
+  const byZThenOrder = (a: (typeof tagged)[number], b: (typeof tagged)[number]) => {
+    const za = a.el.zIndex ?? 0;
+    const zb = b.el.zIndex ?? 0;
+    if (za !== zb) return za - zb;
+    return a.stackIndex - b.stackIndex;
+  };
+  nonText.sort(byZThenOrder);
+  text.sort(byZThenOrder);
+  const merged = [...nonText, ...text];
+  merged.forEach((t, rank) => {
+    t.el.zIndex = rank;
+  });
+  return merged.map((t) => t.el);
 }
 
 function scaleStyle(style: TemplateElement['style'], sFont: number): TemplateElement['style'] {

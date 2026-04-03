@@ -162,13 +162,7 @@ Output ONLY a valid JSON array of ${count} objects, no markdown or explanation. 
 
   const text = response.text ?? '';
   console.log('\n[gemini] contentExpansion llm response:\n' + text + '\n');
-  const cleaned = repairJson(text.replace(/```json?\s*|\s*```/g, '').trim());
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    throw new Error(`Gemini returned invalid JSON: ${text.slice(0, 300)}`);
-  }
+  const parsed = parseLlmJsonWithCandidates(text, 'array');
 
   const arr = Array.isArray(parsed) ? parsed : [parsed];
   return arr.slice(0, count).map((it) => normalizeContentPackage(it, niche, category));
@@ -224,7 +218,8 @@ Typographic Scale Enforcement: Use a clear hierarchy. The HEADLINE must be at le
 
 PHASE 2: TECHNICAL SPECIFICATIONS
 Typography: Pick professional, legible typefaces that fit the archetype and niche — you are not limited to a fixed list. Use well-known, production-ready families (e.g. Google Fonts, common web/system fonts). For each text element, set style.fontFamily as a real CSS font stack when possible (e.g. "Fraunces, serif" or "Outfit, sans-serif"). In design.fontPairing, name heading and body faces that match what you used in the skeleton. Pair a strong display face for headlines with a clear body face; avoid gimmicky or obscure names.
-Color Palette: Use variables ($VAR_BG, $VAR_PRIMARY, $VAR_ACCENT, $VAR_TEXT) to ensure dynamic behavior.
+Color Palette: Use ONLY these tokens in design.color_palette and in element style.color / style.fill / style.stroke (never use short names like $VAR_BG or $VAR_TEXT): $VAR_BG_PRIMARY, $VAR_BG_SECONDARY, $VAR_PRIMARY, $VAR_SECONDARY, $VAR_ACCENT, $VAR_TEXT_MAIN, $VAR_TEXT_SECONDARY.
+Canvas fill: $VAR_BG_PRIMARY is the solid canvas background the user sees behind everything. Pick a cohesive hex that matches the niche and archetype (bakery/wellness → warm creams or soft sage; nightlife/sport → deep jewel or electric accents; PROFESSIONAL/CLEAN may use cool neutrals). Avoid using the same dark blue–slate for every template unless the brief or archetype calls for it; ensure text tokens contrast clearly with $VAR_BG_PRIMARY.
 Visual Weight: Balance a large image in one quadrant with text in the opposite quadrant.
 
 Rule: Every element MUST include content_placeholder (string) and textZone (boolean, false when not over a photo). For text elements, content_placeholder must be the exact label to render (including CTA/action labels).
@@ -243,12 +238,12 @@ BRAND & CONTACT:
 - content.showWebsiteOnLayout (boolean): set **true** only if the visible design should show the URL (then use WEBSITE or {{website}} in that text element’s content_placeholder, or a short “Visit us” line). If **false**, do **not** place the URL or konvrtai.com in any visible copy.
 - design.logoText should be "${APP_CONFIG.BRAND.DISPLAY_NAME}" or a short uppercase variant of it (for metadata; optional on canvas unless you use a logo slot).
 
-IMAGERY — YOU CHOOSE THE COUNT (0 to many):
-- Decide how many **raster** photos the design needs: **zero** (type-led layout with shapes + color/gradient), **one** focal image, or **several** for split layouts / mosaics. More images is not always better; match the archetype.
-- Image roles: BACKGROUND_IMAGE (optional full-bleed behind UI), PRODUCT_IMAGE, PROMO_IMAGE_1 / _2 / _3, LOGO (optional **only** when showBrandLogoImage is true). Omit LOGO entirely for minimal / type-only layouts.
+IMAGERY — YOU CHOOSE THE COUNT (0+), NO FULL-BLEED CANVAS PHOTO:
+- The exported template **never** includes a full-canvas background photo. Canvas fill is **solid color only** via the palette — do **not** add a DECORATIVE shape that covers ~the entire canvas (no full-bleed “frame” rectangles); use smaller shapes, bands, or cards only. Do **not** add any element with role BACKGROUND_IMAGE (omit entirely).
+- Raster photos are only for **inset** roles: PRODUCT_IMAGE, PROMO_IMAGE_1 / _2 / _3, and optional LOGO (only when showBrandLogoImage is true). Zero photos is allowed (typography + shapes + color fields only).
 - For **each** non-LOGO image element, set content_placeholder to a **unique** short Pexels search phrase (no brand names). If you leave it empty, the app maps the role to optional content.stockPhotoQueries pools below.
 - For a LOGO image only when showBrandLogoImage is true: set content_placeholder to "LOGO"; the app injects the real asset.
-- Avoid duplicate roles only for LOGO and BACKGROUND_IMAGE (at most one each). You may use multiple PRODUCT_IMAGE or promo slots for grids.
+- Avoid duplicate LOGO image roles. You may use multiple PRODUCT_IMAGE or promo slots for grids.
 
 STOCK POOL (include every key in content.stockPhotoQueries; use distinct Pexels-style phrases or "" if unused):
 - content.stockPhotoQueries: fullBleedBackground, framedFocus, productDetail, promo1, promo2, promo3 — each a string (wide scene, hero, detail, three alternates). Empty string allowed for unused slots; keys must all be present.
@@ -265,8 +260,10 @@ Return ONLY a JSON object. No prose. Use a root-level "elements" array with elem
   "design": {
     "name": "string",
     "color_palette": {
-      "$VAR_BG": "hex",
+      "$VAR_BG_PRIMARY": "hex",
+      "$VAR_BG_SECONDARY": "hex",
       "$VAR_PRIMARY": "hex",
+      "$VAR_SECONDARY": "hex",
       "$VAR_ACCENT": "hex",
       "$VAR_TEXT_MAIN": "hex",
       "$VAR_TEXT_SECONDARY": "hex"
@@ -324,7 +321,7 @@ Return ONLY a JSON object. No prose. Use a root-level "elements" array with elem
   const response = await ai.models.generateContent({ model, contents: prompt });
   const text = response.text ?? '';
   console.log('\n[gemini] skeleton+content llm response:\n' + text + '\n');
-  const parsed = JSON.parse(repairJson(text.replace(/```json?\s*|\s*```/g, '').trim())) as Record<string, unknown>;
+  const parsed = parseLlmJsonWithCandidates(text, 'object') as Record<string, unknown>;
   return normalizeSkeletonWithContent(parsed, niche, category, width, height);
 }
 
@@ -545,7 +542,7 @@ function normalizeSkeletonWithContent(
     }
   };
   const elements: LlmSkeletonElement[] = rawElements
-    .map((it, idx) => {
+    .map((it, idx): LlmSkeletonElement | null => {
       const o = (it ?? {}) as Record<string, unknown>;
       const type = String(o.type ?? '') as LlmSkeletonElement['type'];
       if (!['text', 'image', 'shape'].includes(type)) return null;
@@ -593,7 +590,11 @@ function normalizeSkeletonWithContent(
             : undefined,
       };
     })
-    .filter(Boolean) as LlmSkeletonElement[];
+    .filter((e): e is LlmSkeletonElement => {
+      if (e == null) return false;
+      if (e.type === 'image' && e.role === 'BACKGROUND_IMAGE') return false;
+      return true;
+    });
 
   let content = normalizeContentPackage((raw.content as unknown) ?? raw, niche, category);
   const hasLogoImage = elements.some((e) => e.type === 'image' && e.role === 'LOGO');
@@ -617,22 +618,21 @@ function normalizeSkeletonWithContent(
   const design: LlmSkeletonWithContent['design'] = {
     designStyle: cleanText(designRaw.designStyle ?? designRaw.name) || 'modern_editorial',
     colorPalette: {
-      $VAR_BG_PRIMARY: String(cpRaw.$VAR_BG_PRIMARY ?? cpRawAlt.$VAR_BG ?? '#0F172A'),
-      $VAR_BG_SECONDARY: String(cpRaw.$VAR_BG_SECONDARY ?? cpRawAlt.$VAR_BG ?? '#111827'),
-      $VAR_PRIMARY: String(cpRaw.$VAR_PRIMARY ?? cpRawAlt.$VAR_PRIMARY ?? '#FFFFFF'),
-      $VAR_SECONDARY: String(cpRaw.$VAR_SECONDARY ?? cpRawAlt.$VAR_PRIMARY ?? '#FF6B6B'),
-      $VAR_ACCENT: String(cpRaw.$VAR_ACCENT ?? cpRawAlt.$VAR_ACCENT ?? '#FFD93D'),
-      $VAR_TEXT_MAIN: String(cpRaw.$VAR_TEXT_MAIN ?? cpRawAlt.$VAR_TEXT_MAIN ?? '#F9FAFB'),
-      $VAR_TEXT_SECONDARY: String(cpRaw.$VAR_TEXT_SECONDARY ?? cpRawAlt.$VAR_TEXT_SECONDARY ?? '#FFFFFF'),
+      $VAR_BG_PRIMARY: String(cpRaw.$VAR_BG_PRIMARY ?? cpRawAlt.$VAR_BG_PRIMARY ?? cpRawAlt.$VAR_BG ?? '#FAF5EF'),
+      $VAR_BG_SECONDARY: String(cpRaw.$VAR_BG_SECONDARY ?? cpRawAlt.$VAR_BG_SECONDARY ?? cpRawAlt.$VAR_BG ?? '#EFE6DC'),
+      $VAR_PRIMARY: String(cpRaw.$VAR_PRIMARY ?? cpRawAlt.$VAR_PRIMARY ?? '#5C4033'),
+      $VAR_SECONDARY: String(cpRaw.$VAR_SECONDARY ?? cpRawAlt.$VAR_SECONDARY ?? '#8B6914'),
+      $VAR_ACCENT: String(cpRaw.$VAR_ACCENT ?? cpRawAlt.$VAR_ACCENT ?? '#C45C26'),
+      $VAR_TEXT_MAIN: String(cpRaw.$VAR_TEXT_MAIN ?? cpRawAlt.$VAR_TEXT_MAIN ?? '#1C1917'),
+      $VAR_TEXT_SECONDARY: String(cpRaw.$VAR_TEXT_SECONDARY ?? cpRawAlt.$VAR_TEXT_SECONDARY ?? '#57534E'),
     },
     fontPairing: {
       heading: cleanText(fpRaw.heading) || 'Inter',
       body: cleanText(fpRaw.body) || 'Inter',
       accent: cleanText(fpRaw.accent) || undefined,
     },
-    backgroundPreference: ['image', 'color', 'gradient'].includes(String(designRaw.backgroundPreference))
-      ? (String(designRaw.backgroundPreference) as 'image' | 'color' | 'gradient')
-      : 'image',
+    // Pipeline does not emit full-bleed canvas images; keep metadata as color-first for downstream.
+    backgroundPreference: 'color',
     logoText: cleanText(designRaw.logoText) || APP_CONFIG.BRAND.DISPLAY_NAME,
   };
   return {
@@ -640,12 +640,12 @@ function normalizeSkeletonWithContent(
     design,
     elements: elements.length > 0 ? elements : [
       {
-        element_id: 'fallback-bg',
-        type: 'image',
-        role: 'BACKGROUND_IMAGE',
+        element_id: 'fallback-bg-shape',
+        type: 'shape',
+        role: 'DECORATIVE',
         position: { x: 0, y: 0 },
         dimensions: { w: width, h: height },
-        style: {},
+        style: { fill: '$VAR_BG_PRIMARY' },
         textZone: false,
       },
       {
@@ -672,8 +672,95 @@ function cleanText(v: unknown): string {
 }
 
 function repairJson(input: string): string {
-  // Keep this conservative: only fix common non-JSON tokens produced by models.
-  // `undefined` is not valid JSON; replace it with null when used as a value.
-  return input.replace(/:\s*undefined\b/g, ': null');
+  let s = input.replace(/^\uFEFF/, '').replace(/^\u00A0+/, '');
+  // Smart quotes → ASCII double quote (common in model output).
+  s = s.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
+  s = s.replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'");
+  // `undefined` / non-JSON literals → null
+  s = s.replace(/:\s*undefined\b/g, ': null');
+  s = s.replace(/:\s*NaN\b/gi, ': null');
+  s = s.replace(/:\s*-Infinity\b/gi, ': null');
+  s = s.replace(/:\s*Infinity\b/gi, ': null');
+  // Single-quoted keys like 'menuTitle': → "menuTitle":
+  s = s.replace(/([{,][\s\r\n]*)'([^'\r\n\\]*(?:\\.[^'\r\n\\]*)*)'(\s*:)/g, (_m, sp, key, colon) => {
+    const escaped = String(key).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return `${String(sp)}"${escaped}"${String(colon)}`;
+  });
+  // Trailing commas before } or ] (repeat until stable; models often emit one extra comma).
+  let prev = '';
+  while (prev !== s) {
+    prev = s;
+    s = s.replace(/,\s*([}\]])/g, '$1');
+  }
+  return s;
+}
+
+/** First complete JSON value of the given kind, respecting strings so braces inside "..." are ignored. */
+function extractCompleteJsonSegment(raw: string, kind: 'object' | 'array'): string | null {
+  const open = kind === 'object' ? '{' : '[';
+  const start = raw.indexOf(open);
+  if (start === -1) return null;
+  const stack: string[] = [];
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < raw.length; i++) {
+    const c = raw[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (c === '\\') escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === '{') stack.push('}');
+    else if (c === '[') stack.push(']');
+    else if (c === '}' || c === ']') {
+      const expected = stack.pop();
+      if (expected !== c) return null;
+      if (stack.length === 0) return raw.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function parseLlmJsonWithCandidates(raw: string, shape: 'object' | 'array'): unknown {
+  const stripped = raw.replace(/```json?\s*|\s*```/gi, '').trim();
+  const candidates: string[] = [];
+  const pushUnique = (fragment: string | null | undefined) => {
+    if (!fragment) return;
+    const fixed = repairJson(fragment.trim());
+    if (fixed && !candidates.includes(fixed)) candidates.push(fixed);
+  };
+  pushUnique(stripped);
+  pushUnique(extractCompleteJsonSegment(stripped, shape));
+
+  let lastErr: Error | undefined;
+  for (const c of candidates) {
+    try {
+      return JSON.parse(c);
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+    }
+    let relaxed = c;
+    for (let n = 0; n < 12; n++) {
+      const next = relaxed.replace(/,\s*([}\]])/g, '$1');
+      if (next === relaxed) break;
+      relaxed = next;
+      try {
+        return JSON.parse(relaxed);
+      } catch (e) {
+        lastErr = e instanceof Error ? e : new Error(String(e));
+      }
+    }
+  }
+  const hint = lastErr?.message ? ` (${lastErr.message})` : '';
+  const preview = stripped.length > 360 ? `${stripped.slice(0, 360)}…` : stripped;
+  throw new Error(`Invalid JSON after repair${hint}: ${preview}`);
 }
 

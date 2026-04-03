@@ -8,12 +8,118 @@ import path from 'path';
 import { generateVariations, generateVariationsStream } from './engine/generateVariations.js';
 import type { GenerateVariationsInput } from './types/schema.js';
 import { APP_CONFIG } from './config/constants.js';
+import { mapTemplateToUploadJson } from './engine/mapTemplateToUploadJson.js';
+import { toStrictSnakeTemplate } from './engine/strictTemplateJson.js';
 
 const app = express();
 const PORT = APP_CONFIG.PORT;
 
+function uploadTemplatePostUrl(): string {
+  const u = APP_CONFIG.UPLOAD_TEMPLATE.API_URL.trim();
+  const base = u.replace(/\/+$/, '');
+  return `${base}/`;
+}
+
+function uploadTemplateRequestSummaryLines(): string {
+  return [
+    `POST ${uploadTemplatePostUrl()}`,
+    'accept: application/json',
+    'Content-Type: application/json',
+    'Authorization: Bearer ***',
+  ].join('\n');
+}
+
 app.use(cors());
 app.use(express.json());
+
+function normalizeClientBearerToken(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  let s = raw.trim();
+  if (!s) return '';
+  if (/^bearer\s+/i.test(s)) s = s.replace(/^bearer\s+/i, '').trim();
+  return s;
+}
+
+app.post('/api/dev/templates/map', (req, res) => {
+  try {
+    const template = (req.body as { template?: unknown } | undefined)?.template;
+    if (template === undefined) {
+      res.status(400).json({ error: 'template is required' });
+      return;
+    }
+    const mapped = mapTemplateToUploadJson(template);
+    const hasEnvToken = Boolean(APP_CONFIG.UPLOAD_TEMPLATE.BEARER_TOKEN);
+    res.json({
+      mapped,
+      requestSummary: uploadTemplateRequestSummaryLines(),
+      publishConfigured: hasEnvToken,
+      /** Client may send `bearerToken` on publish when this is false. */
+      optionalBearerTokenSupported: true,
+    });
+  } catch (err) {
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: rawMessage || 'Map failed' });
+  }
+});
+
+app.post('/api/dev/templates/publish', async (req, res) => {
+  const body = req.body as { template?: unknown; bearerToken?: unknown } | undefined;
+  const fromClient = normalizeClientBearerToken(body?.bearerToken);
+  const fromEnv = APP_CONFIG.UPLOAD_TEMPLATE.BEARER_TOKEN;
+  const token = fromClient || fromEnv;
+  if (!token) {
+    res.status(503).json({
+      error:
+        'No bearer token: set UPLOAD_TEMPLATE_BEARER_TOKEN in .env or send bearerToken in the request body.',
+    });
+    return;
+  }
+  const template = body?.template;
+  if (template === undefined) {
+    res.status(400).json({ error: 'template is required' });
+    return;
+  }
+  let mapped: Record<string, unknown>;
+  try {
+    mapped = mapTemplateToUploadJson(template);
+  } catch (err) {
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    res.status(400).json({ error: rawMessage || 'Invalid template' });
+    return;
+  }
+  const url = uploadTemplatePostUrl();
+  try {
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(mapped),
+    });
+    const text = await upstream.text();
+    let responseBodyJson: unknown;
+    try {
+      responseBodyJson = text ? JSON.parse(text) : undefined;
+    } catch {
+      responseBodyJson = undefined;
+    }
+    res.json({
+      ok: upstream.ok,
+      status: upstream.status,
+      statusText: upstream.statusText,
+      responseBodyText: text,
+      responseBodyJson,
+    });
+  } catch (err) {
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    res.status(502).json({
+      ok: false,
+      error: rawMessage || 'Upstream request failed',
+    });
+  }
+});
 
 app.post('/api/generate', async (req, res) => {
   try {
@@ -45,7 +151,7 @@ app.post('/api/generate', async (req, res) => {
       brand_assets: body.brand_assets,
     };
     const templates = await generateVariations(input);
-    res.json({ templates });
+    res.json({ templates: templates.map((tpl) => toStrictSnakeTemplate(tpl)) });
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : String(err);
     const isQuota =
@@ -127,9 +233,8 @@ app.get('/api/generate/stream', async (req, res) => {
     };
 
     await generateVariationsStream(input, (template, index, total) => {
-      res.write(
-        `event: template\ndata: ${JSON.stringify({ template, index, total })}\n\n`,
-      );
+      const strict = toStrictSnakeTemplate(template);
+      res.write(`event: template\ndata: ${JSON.stringify({ template: strict, index, total })}\n\n`);
     });
 
     close();

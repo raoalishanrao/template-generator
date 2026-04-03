@@ -12,6 +12,11 @@ export const APP_CONFIG = {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
     PEXELS_API_KEY: process.env.PEXELS_API_KEY || '',
   },
+  /** Template upload API (server-side only; never exposed to the browser). */
+  UPLOAD_TEMPLATE: {
+    API_URL: (process.env.UPLOAD_TEMPLATE_API || 'https://social.kualitech.io/templates/').trim(),
+    BEARER_TOKEN: (process.env.UPLOAD_TEMPLATE_BEARER_TOKEN || '').trim(),
+  },
   ASSETS: {
     LOGO_URL: process.env.LOGO_URL || '/assets/konvrt_logo.png',
     /** Fixed render box for LOGO image layers in emitted templates (height +15 vs prior 120). */
