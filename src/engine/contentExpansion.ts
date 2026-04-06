@@ -79,10 +79,10 @@ Fixed brand (always use exactly — do not invent a different company name):
 
 Stock photography via Pexels (critical):
 - Return stockPhotoQueries with six DISTINCT short search phrases (no brand names). Each phrase must describe a different scene/subject so the API does not return the same photo twice (e.g. wide dining room blur vs. plated pizza top-down vs. flour-on-board macro).
-- fullBleedBackground = atmospheric wide shot for the **full canvas** behind UI.
-- framedFocus = **inset/main** hero image (e.g. one plated dish), different from fullBleedBackground.
-- productDetail = complementary **detail** (hands, ingredient texture, close macro) — not the same wording as framedFocus.
-- promo1, promo2, promo3 = three more **different** phrases for tile/mosaic slots.
+- fullBleedBackground = wide soft **BACKGROUND_IMAGE** layer mood (not a canvas URL — templates use a full-bleed image **element** when designers choose a photo backdrop).
+- framedFocus = **inset/main** hero subject (e.g. one plated dish), wording distinct from fullBleedBackground.
+- productDetail = complementary **detail** (texture, hands, macro) — not the same as framedFocus.
+- promo1, promo2, promo3 = three more **different** phrases for alternate / tile slots.
 
 Output quality requirements:
 - Mature, polished, premium tone. Human and specific, never generic.
@@ -191,7 +191,7 @@ CONTEXT
 Niche: "${niche}"
 Platform: "${platform}"
 Canvas: ${width}x${height}
-Variation Index: ${variationIndex} (this run must differ clearly from other indices: change composition, grid, image count, text placement, and archetype bias — do not repeat the same layout recipe as another variation)
+Variation Index: ${variationIndex} (this run must differ clearly from other indices: change composition, grid, image count, text placement, **background_preference** when appropriate — color vs gradient vs full-bleed **image** — and archetype bias; do not repeat the same layout recipe as another variation)
 ${marketingGoal ? `Marketing Goal: "${marketingGoal}"\n` : ''}${opts?.brandName ? `Preferred Brand Name: "${opts.brandName}"\n` : ''}${opts?.visualStyle ? `Preferred Visual Style: "${opts.visualStyle}"\n` : ''}${opts?.tone ? `Preferred Tone: "${opts.tone}"\n` : ''}
 
 PHASE 1: DESIGN STRATEGY (INTERNAL RATIONALE)
@@ -220,11 +220,12 @@ Typographic Scale Enforcement: Use a clear hierarchy. When BODY_TEXT is present,
 PHASE 2: TECHNICAL SPECIFICATIONS
 Typography: Pick professional, legible typefaces that fit the archetype and niche — you are not limited to a fixed list. Use well-known, production-ready families (e.g. Google Fonts, common web/system fonts). For each text element, set style.fontFamily as a real CSS font stack when possible (e.g. "Fraunces, serif" or "Outfit, sans-serif"). In design.fontPairing, name heading and body faces that match what you used in the skeleton. Pair a strong display face for headlines with a clear body face; avoid gimmicky or obscure names.
 Color Palette: Use ONLY these tokens in design.color_palette and in element style.color / style.fill / style.stroke (never use short names like $VAR_BG or $VAR_TEXT): $VAR_BG_PRIMARY, $VAR_BG_SECONDARY, $VAR_PRIMARY, $VAR_SECONDARY, $VAR_ACCENT, $VAR_TEXT_MAIN, $VAR_TEXT_SECONDARY.
-Canvas background (design.background_preference): The canvas **never** carries a photo URL — only **color** (solid $VAR_BG_PRIMARY) or **gradient** (Tokens → CSS linear-gradient). Use **color** for a flat/matte base; use **gradient** for a smooth multi-stop look. For **image**, the canvas base is still solid **color** from $VAR_BG_PRIMARY (shows behind / letterboxing); the **photo** is always a **type:image** with role **BACKGROUND_IMAGE** (full rect, z_index 0) and a Pexels phrase in content_placeholder — also set **content.stockPhotoQueries.fullBleedBackground**. If you pick **image** but omit that element, the app may inject it from fullBleedBackground. When using **gradient** or plain **color** only, do **not** add BACKGROUND_IMAGE.
-$VAR_BG_PRIMARY / $VAR_BG_SECONDARY must stay cohesive for shapes, type, and the canvas fill that shows **behind** the BACKGROUND_IMAGE layer (e.g. matte or letterboxing).
-Visual Weight: Balance a large image in one quadrant with text in the opposite quadrant when applicable; hero + headline-only layouts are encouraged when elegant.
+Canvas background (design.background_preference): The exported canvas object is **never** a photo URL — only **color** (solid $VAR_BG_PRIMARY) or **gradient** (token hexes in a linear blend). Pick **color** for a flat base, **gradient** for smooth premium fills. Pick **image** only when the design uses a full-bleed **photo element**: canvas fill stays **solid** $VAR_BG_PRIMARY (edges/loading); the raster is **always** a **type:image** with role **BACKGROUND_IMAGE**. Set **content.stockPhotoQueries.fullBleedBackground** to a moody, non-branded Pexels phrase; add an explicit **BACKGROUND_IMAGE** row (recommended) with **rect** x:0, y:0, **w:${width}**, **h:${height}**, **z_index: 0**, and that phrase in **content_placeholder** (runtime may inject the row if missing). **Mutually exclusive:** if **background_preference** is **gradient** or you skip the photo entirely, **do not** emit BACKGROUND_IMAGE. If you use a full-bleed photo, set **background_preference** to **image** (not **gradient** on the canvas).
+$VAR_BG_PRIMARY / $VAR_BG_SECONDARY must stay cohesive for shapes, typography, and the solid canvas behind the photo layer.
+Z-order (z_index — stacking intent): **BACKGROUND_IMAGE** uses **z_index 0** (rearmost image). **PRODUCT_IMAGE** / **PROMO_*** : keep **lower** z_index than **LOGO** when both appear (e.g. product 3–7, logo 8–11). **Text** and key **DECORATIVE** bands: **higher** z_index than hero rasters so copy reads on top. The main app may **serialize** raster layers as product → logo → background last in JSON, but **z_index** must still follow this hierarchy so previews and engines agree.
+Visual Weight: Balance hero imagery with type; elegant minimal layouts (headline + one focal image) are preferred over cluttered stacks.
 
-Rule: Every element MUST include content_placeholder (string) and textZone (boolean, false when not over a photo). For text elements, content_placeholder must be the exact label to render (including CTA/action labels).
+Rule: Include **design.fontPairing** (heading, body, optional accent) matching skeleton type choices. Every element MUST include content_placeholder (string) and textZone (boolean, false when not over a photo). For text elements, content_placeholder must be the exact label to render (including CTA/action labels).
 JSON output: every element's style object SHOULD include these keys when possible (color, fontFamily, fontSize, fontWeight, alignment, opacity, letterSpacing, backgroundColor, fill, stroke, strokeWidth, cornerRadius, borderRadius). Use "" or 0 for fields that do not apply (images may use all-zero / empty; shapes use fill/cornerRadius; text uses typography fields).
 
 TEXT CONSTRAINTS (required for every element where type is "text"):
@@ -242,19 +243,18 @@ BRAND & CONTACT (canonical package fields — visibility in the layout is option
 - design.logoText: "${APP_CONFIG.BRAND.DISPLAY_NAME}" or short uppercase variant for metadata.
 
 IMAGERY — SIMPLE, 0+ RASTERS:
-- Full-bleed photo = **BACKGROUND_IMAGE** element only (never a canvas background URL). Use background_preference **image** + fullBleedBackground phrase + one BACKGROUND_IMAGE row (or rely on synthesis + phrase). No redundant full-canvas DECORATIVE shape for the same effect.
-- Inset photos: PRODUCT_IMAGE, PROMO_IMAGE_1 / _2 / _3, optional LOGO (if showBrandLogoImage). Typography-only or gradient/color-only layouts are valid.
-- For each non-LOGO raster element, content_placeholder should be a **distinct** short Pexels search phrase (or rely on stockPhotoQueries pools if empty).
-- LOGO image: content_placeholder "LOGO" when used.
-- Avoid duplicate LOGO roles. Multiple PRODUCT_IMAGE slots allowed when intentional (e.g. grid).
-- DECORATIVE shapes: prefer **bands, half-blocks, cards**, or corner accents — avoid a second full-canvas solid that only repeats the canvas fill.
+- Full-bleed photo = **BACKGROUND_IMAGE** only (never a URL on the canvas object). **image** preference + **fullBleedBackground** + one full-canvas BACKGROUND_IMAGE row (z_index **0**). Do not duplicate with a same-purpose full-canvas shape.
+- Inset / hero rasters: **PRODUCT_IMAGE**, **PROMO_IMAGE_1** / **2** / **3** (when used). Optional **LOGO** image only if showBrandLogoImage. Typography-only or solid/gradient-only layouts are valid with **color** or **gradient** preference (no BACKGROUND_IMAGE).
+- Each raster’s **content_placeholder** = distinct short Pexels phrase (no brand names), except **LOGO** → use **"LOGO"**.
+- At most one **LOGO** image. Multiple **PRODUCT_IMAGE** allowed for grids only when intentional.
+- DECORATIVE shapes: bands, cards, partial panels — avoid meaningless full-canvas rectangles that only echo the canvas fill.
 
 STOCK POOL (include every key in content.stockPhotoQueries; use distinct Pexels-style phrases or "" if unused):
 - content.stockPhotoQueries: fullBleedBackground, framedFocus, productDetail, promo1, promo2, promo3 — each a string (wide scene, hero, detail, three alternates). Empty string allowed for unused slots; keys must all be present.
 - content.imageQueries: 3 short phrases summarizing the niche/visual mood (still required).
 
 OUTPUT FORMAT
-Return ONLY a JSON object. No prose. Use a root-level "elements" array with element_id, position, dimensions, style, content_placeholder, and constraints on every row (null for image/shape, full object for text).
+Return ONLY a JSON object. No prose. Put the skeleton in **root-level "elements"** (preferred) or under **design.elements** — only one array; every row needs element_id (or id), rect (or position + dimensions), z_index, style, content_placeholder, textZone, and constraints (null for image/shape; full object for text).
 {
   "rationale": {
     "selected_archetype": "string",
@@ -264,6 +264,7 @@ Return ONLY a JSON object. No prose. Use a root-level "elements" array with elem
   "design": {
     "name": "string",
     "background_preference": "color|gradient|image",
+    "fontPairing": { "heading": "string", "body": "string", "accent": "string" },
     "color_palette": {
       "$VAR_BG_PRIMARY": "hex",
       "$VAR_BG_SECONDARY": "hex",
@@ -277,7 +278,7 @@ Return ONLY a JSON object. No prose. Use a root-level "elements" array with elem
       {
         "id": "ELEM-01",
         "type": "text|image|shape",
-        "role": "HEADLINE|SUBHEAD|BODY|LOGO|PRODUCT_IMAGE|BACKGROUND_IMAGE|DECORATIVE",
+        "role": "BRAND_NAME|MENU_TITLE|PRODUCT_NAME|HEADLINE|SUBHEAD|BODY|BODY_TEXT|DESCRIPTION|PHONE_NUMBER|LOGO|PRODUCT_IMAGE|PROMO_IMAGE_1|PROMO_IMAGE_2|PROMO_IMAGE_3|BACKGROUND_IMAGE|DECORATIVE",
         "rect": {"x": number, "y": number, "w": number, "h": number},
         "z_index": number,
         "style": {
